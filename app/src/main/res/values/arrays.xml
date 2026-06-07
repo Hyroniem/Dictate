@@ -261,11 +261,13 @@
     <string-array name="dictate_api_providers">
         <item>OpenAI</item>
         <item>Groq</item>
+        <item>Mistral</item>
         <item>@string/dictate_custom_provider</item>
     </string-array>
     <string-array name="dictate_api_providers_values">
         <item>https://api.openai.com/v1/</item>
         <item>https://api.groq.com/openai/v1/</item>
+        <item>https://api.mistral.ai/v1/</item>
         <item>custom_server</item>
     </string-array>
 
@@ -287,6 +289,15 @@
     <string-array name="dictate_transcription_models_groq_values">
         <item>whisper-large-v3-turbo</item>
         <item>whisper-large-v3</item>
+    </string-array>
+
+    <string-array name="dictate_transcription_models_mistral">
+        <item>Voxtral Mini</item>
+        <item>Voxtral</item>
+    </string-array>
+    <string-array name="dictate_transcription_models_mistral_values">
+        <item>voxtral-mini-latest</item>
+        <item>voxtral-v1</item>
     </string-array>
 
     <string-array name="dictate_rewording_models_openai">
@@ -321,6 +332,17 @@
         <item>meta-llama/llama-guard-4-12b</item>
         <item>openai/gpt-oss-120b</item>
         <item>openai/gpt-oss-20b</item>
+    </string-array>
+
+    <string-array name="dictate_rewording_models_mistral">
+        <item>Mistral Large ($2.00 / $6.00 / 1M)</item>
+        <item>Mistral Small ($0.10 / $0.30 / 1M)</item>
+        <item>Mixtral 8x7B</item>
+    </string-array>
+    <string-array name="dictate_rewording_models_mistral_values">
+        <item>mistral-large-latest</item>
+        <item>mistral-small-latest</item>
+        <item>open-mixtral-8x7b</item>
     </string-array>
     
     <string-array name="dictate_theme_entries">

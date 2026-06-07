@@ -1493,8 +1493,10 @@ public class DictateInputMethodService extends InputMethodService {
                 switch (transcriptionProvider) {  // for upgrading: use old transcription_model preference
                     case 0: transcriptionModel = sp.getString("net.devemperor.dictate.transcription_openai_model", sp.getString("net.devemperor.dictate.transcription_model", "gpt-4o-mini-transcribe")); break;
                     case 1: transcriptionModel = sp.getString("net.devemperor.dictate.transcription_groq_model", "whisper-large-v3-turbo"); break;
-                    case 2: transcriptionModel = sp.getString("net.devemperor.dictate.transcription_custom_model", getString(R.string.dictate_custom_transcription_model_hint));
+                    case 2: transcriptionModel = sp.getString("net.devemperor.dictate.transcription_mistral_model", "voxtral-mini-latest"); break;
+                    case 3: transcriptionModel = sp.getString("net.devemperor.dictate.transcription_custom_model", getString(R.string.dictate_custom_transcription_model_hint));
                 }
+                if (!apiHost.endsWith("/")) apiHost += "/";
 
                 OpenAIOkHttpClient.Builder clientBuilder = OpenAIOkHttpClient.builder()
                         .apiKey(apiKey)
@@ -1574,7 +1576,7 @@ public class DictateInputMethodService extends InputMethodService {
                     if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
                     mainHandler.post(() -> {
                         resendButton.setVisibility(View.VISIBLE);
-                        String message = Objects.requireNonNull(e.getMessage()).toLowerCase();
+                        String message = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
                         if (message.contains("api key")) {
                             showInfo("invalid_api_key");
                         } else if (message.contains("quota")) {
@@ -1584,7 +1586,7 @@ public class DictateInputMethodService extends InputMethodService {
                         } else if (message.contains("format")) {
                             showInfo("format_not_supported");
                         } else {
-                            showInfo("internet_error");
+                            showApiError(e.getMessage());
                         }
                     });
                 } else if (e.getCause().getMessage() != null && (e.getCause().getMessage().contains("timeout") || e.getCause().getMessage().contains("failed to connect"))) {
@@ -1668,13 +1670,13 @@ public class DictateInputMethodService extends InputMethodService {
                     if (vibrationEnabled) vibrator.vibrate(VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE));
                     mainHandler.post(() -> {
                         resendButton.setVisibility(View.VISIBLE);
-                        String message = Objects.requireNonNull(e.getMessage()).toLowerCase();
+                        String message = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
                         if (message.contains("api key")) {
                             showInfo("invalid_api_key");
                         } else if (message.contains("quota")) {
                             showInfo("quota_exceeded");
                         } else {
-                            showInfo("internet_error");
+                            showApiError(e.getMessage());
                         }
                     });
                 } else if (e.getCause().getMessage() != null && e.getCause().getMessage().contains("timeout")) {
@@ -1730,6 +1732,9 @@ public class DictateInputMethodService extends InputMethodService {
                 rewordingModel = sp.getString("net.devemperor.dictate.rewording_groq_model", "llama-3.3-70b-versatile");
                 break;
             case 2:
+                rewordingModel = sp.getString("net.devemperor.dictate.rewording_mistral_model", "mistral-large-latest");
+                break;
+            case 3:
                 rewordingModel = sp.getString("net.devemperor.dictate.rewording_custom_model",
                         getString(R.string.dictate_custom_rewording_model_hint));
                 break;
@@ -1737,6 +1742,7 @@ public class DictateInputMethodService extends InputMethodService {
                 rewordingModel = "";
         }
         if (TextUtils.isEmpty(rewordingModel)) throw new IllegalStateException("Rewording model missing");
+        if (!apiHost.endsWith("/")) apiHost += "/";
 
         OpenAIOkHttpClient.Builder clientBuilder = OpenAIOkHttpClient.builder()
                 .apiKey(apiKey)
@@ -2084,6 +2090,15 @@ public class DictateInputMethodService extends InputMethodService {
                 infoNoButton.setOnClickListener(v -> infoCl.setVisibility(View.GONE));
                 break;
         }
+    }
+
+    private void showApiError(String errorMessage) {
+        infoCl.setVisibility(View.VISIBLE);
+        infoTv.setTextColor(getResources().getColor(R.color.dictate_red, getTheme()));
+        infoTv.setText(errorMessage != null && !errorMessage.isEmpty() ? errorMessage : getString(R.string.dictate_internet_error_msg));
+        infoYesButton.setVisibility(View.GONE);
+        infoNoButton.setVisibility(View.VISIBLE);
+        infoNoButton.setOnClickListener(v -> infoCl.setVisibility(View.GONE));
     }
 
     private String getDictateButtonText() {
