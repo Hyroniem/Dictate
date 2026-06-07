@@ -35,7 +35,7 @@ public class UsageDatabaseHelper extends SQLiteOpenHelper {
 
     public void edit(String model, long timeToAdd, long inputTokensToAdd, long outputTokensToAdd, long provider) {
         SQLiteDatabase db = this.getWritableDatabase();
-        Cursor cursor = db.rawQuery("SELECT * FROM USAGE WHERE MODEL_NAME='" + model + "'", null);
+        Cursor cursor = db.rawQuery("SELECT * FROM USAGE WHERE MODEL_NAME=?", new String[]{model});
 
         boolean entryExists = cursor.moveToFirst();
         cursor.close();
@@ -49,13 +49,13 @@ public class UsageDatabaseHelper extends SQLiteOpenHelper {
             cv.put("MODEL_PROVIDER", provider);
             db.insert("USAGE", null, cv);
         } else {
-            cursor = db.rawQuery("SELECT * FROM USAGE WHERE MODEL_NAME='" + model + "'", null);
+            cursor = db.rawQuery("SELECT * FROM USAGE WHERE MODEL_NAME=?", new String[]{model});
             if (cursor.moveToFirst()) {
                 ContentValues cv = new ContentValues();
                 cv.put("AUDIO_TIME", cursor.getLong(1) + timeToAdd);
                 cv.put("INPUT_TOKENS", cursor.getLong(2) + inputTokensToAdd);
                 cv.put("OUTPUT_TOKENS", cursor.getLong(3) + outputTokensToAdd);
-                db.update("USAGE", cv, "MODEL_NAME='" + model + "'", null);
+                db.update("USAGE", cv, "MODEL_NAME=?", new String[]{model});
             }
             cursor.close();
         }
@@ -86,7 +86,7 @@ public class UsageDatabaseHelper extends SQLiteOpenHelper {
 
     public double getCost(String modelName) {
         SQLiteDatabase db = this.getReadableDatabase();
-        Cursor cursor = db.rawQuery("SELECT * FROM USAGE WHERE MODEL_NAME='" + modelName + "'", null);
+        Cursor cursor = db.rawQuery("SELECT * FROM USAGE WHERE MODEL_NAME=?", new String[]{modelName});
 
         double cost = 0;
         if (cursor.moveToFirst()) {
