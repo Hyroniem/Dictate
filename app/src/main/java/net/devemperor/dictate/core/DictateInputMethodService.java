@@ -1486,6 +1486,7 @@ public class DictateInputMethodService extends InputMethodService {
                 if (apiHost.equals("custom_server")) apiHost = sp.getString("net.devemperor.dictate.transcription_custom_host", getString(R.string.dictate_custom_server_host_hint));
 
                 String apiKey = sp.getString("net.devemperor.dictate.transcription_api_key", sp.getString("net.devemperor.dictate.api_key", "NO_API_KEY")).replaceAll("[^ -~]", "");
+                if (apiKey.isEmpty()) apiKey = "no-key";  // SDK requires non-empty; custom servers that need no auth will ignore the header
                 String proxyHost = sp.getString("net.devemperor.dictate.proxy_host", getString(R.string.dictate_settings_proxy_hint));
 
                 String transcriptionModel = "";
@@ -1717,9 +1718,10 @@ public class DictateInputMethodService extends InputMethodService {
 
         String apiKey = sp.getString("net.devemperor.dictate.rewording_api_key",
                 sp.getString("net.devemperor.dictate.api_key", "NO_API_KEY"));
-        if (TextUtils.isEmpty(apiKey)) throw new IllegalStateException("API key missing");
         apiKey = apiKey.replaceAll("[^ -~]", "");
-        if ("NO_API_KEY".equals(apiKey) || apiKey.isEmpty()) throw new IllegalStateException("API key missing");
+        // For custom servers that need no auth, use a placeholder so the SDK stays happy
+        if (rewordingProvider != 3 && ("NO_API_KEY".equals(apiKey) || apiKey.isEmpty())) throw new IllegalStateException("API key missing");
+        if (apiKey.isEmpty() || "NO_API_KEY".equals(apiKey)) apiKey = "no-key";
 
         String rewordingModel;
         switch (rewordingProvider) {
