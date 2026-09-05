@@ -207,6 +207,10 @@ tasks.withType<Test> {
     testLogging {
         events = setOf(TestLogEvent.FAILED, TestLogEvent.PASSED, TestLogEvent.SKIPPED)
     }
+    // Gradle gives a test JVM 512 MB by default, and ImeWindowControllerEditorMoveTest exhausts it:
+    // its data-driven cases are a product of every root inset, fixed mode and move direction, and the
+    // suite dies with an OutOfMemoryError partway through the rightward moves.
+    maxHeapSize = "2g"
     useJUnitPlatform()
 }
 
