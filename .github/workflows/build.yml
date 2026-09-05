@@ -24,7 +24,7 @@ jobs:
     env:
       # Lifted into env because the `secrets` context cannot be read from a step's `if:`.
       KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
-      KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+      STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
       KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
       KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
     steps:
@@ -49,7 +49,7 @@ jobs:
           echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
           cat > keystore.properties <<EOF
           storeFile=$RUNNER_TEMP/release.jks
-          storePassword=$KEYSTORE_PASSWORD
+          storePassword=$STORE_PASSWORD
           keyAlias=$KEY_ALIAS
           keyPassword=$KEY_PASSWORD
           EOF
@@ -73,8 +73,10 @@ jobs:
       - name: Unit tests
         run: ./gradlew --no-daemon testDebugUnitTest
 
+      # :app only. A root assembleRelease also builds the Wear module, which costs four minutes and
+      # produces an APK this workflow does not collect.
       - name: Assemble
-        run: ./gradlew --no-daemon assembleRelease
+        run: ./gradlew --no-daemon :app:assembleRelease
 
       - uses: actions/upload-artifact@v4
         with:
