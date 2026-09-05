@@ -2250,7 +2250,7 @@ object DictateController {
                     // instead of ~41 of them — and not at all when the OS already says we are offline.
                     val fastFallback = FastFallback.armed(appContext, preset)
                     try {
-                        if (fastFallback) FastFallback.requireOnline(appContext)
+                        if (fastFallback) FastFallback.requireReachable(appContext, preset)
                         OpenAiCompatibleClient.from(
                             preset, apiKey,
                             baseUrlOverride = baseUrlOverrideFor(account),
@@ -2300,6 +2300,8 @@ object DictateController {
                         // retries) — transcribe on-device with the downloaded model instead of erroring.
                         val fallback = (if (fallbackId == ProviderRegistry.LOCAL.id) localFallbackProvider(appContext, e) else null)
                             ?: throw e
+                        // Remember this so the next dictation does not pay to rediscover it (#104).
+                        FastFallback.noteUnreachable(preset.id)
                         LocalTranscriptionProvider.setIdleUnloadMillis(
                             prefs.dictate.localModelUnloadMinutes.get() * 60_000L,
                         )
@@ -3553,7 +3555,7 @@ object DictateController {
                 // because the ones behind it are queueing up while this one stalls.
                 val fastFallback = FastFallback.armed(appContext, preset)
                 try {
-                    if (fastFallback) FastFallback.requireOnline(appContext)
+                    if (fastFallback) FastFallback.requireReachable(appContext, preset)
                     OpenAiCompatibleClient.from(
                         preset, apiKey,
                         baseUrlOverride = baseUrlOverrideFor(account),
@@ -3592,6 +3594,7 @@ object DictateController {
                         }
                         val fallback = (if (fallbackId == ProviderRegistry.LOCAL.id) localFallbackProvider(appContext, e) else null)
                             ?: throw e
+                        FastFallback.noteUnreachable(preset.id)
                         fallbackEngine = onDeviceHistoryEngine(fallback.model)
                         // On-device gets the segment as recorded, never the sped-up copy (#272).
                         fallback.provider.transcribe(if (spedUp != null) request.copy(audioFile = wav) else request)
