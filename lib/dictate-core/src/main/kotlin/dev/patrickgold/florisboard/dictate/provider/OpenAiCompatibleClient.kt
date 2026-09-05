@@ -77,6 +77,7 @@ class OpenAiCompatibleClient(
             HttpClientKey(
                 timeoutSeconds = config.timeoutSeconds,
                 callTimeoutSeconds = config.callTimeoutSeconds,
+                budget = config.networkBudget,
                 proxy = config.proxy,
                 trustUserCerts = config.trustUserCerts,
                 clientCertAlias = config.clientCertAlias,
@@ -1512,7 +1513,7 @@ class OpenAiCompatibleClient(
 
     internal suspend fun executeForBody(
         request: Request,
-        maxRetries: Int = 3,
+        maxRetries: Int = config.networkBudget.maxRetries,
         onRetry: (attempt: Int) -> Unit = {},
         diagnosticLabel: String? = null,
     ): String {
@@ -1561,7 +1562,7 @@ class OpenAiCompatibleClient(
                 if (mapped.isRetryable && !handedOn && attempt < maxRetries && withinBudget) {
                     attempt++
                     onRetry(attempt + 1) // report the upcoming attempt (2nd, 3rd, …)
-                    delay(RETRY_DELAY_MS)
+                    delay(config.networkBudget.retryDelayMs)
                 } else {
                     throw mapped
                 }
@@ -1685,10 +1686,12 @@ class OpenAiCompatibleClient(
         get() = TimeUnit.SECONDS.toMillis(config.callTimeoutSeconds ?: config.timeoutSeconds)
 
     private val connectTimeoutSeconds: Long
+        // The shorter of the two wins: another provider waiting (#455) and the on-device model standing
+        // by ([NetworkBudget.FAST_FAIL]) each have their own reason to give up on connecting early.
         get() = if (config.handOverUnreachable) {
-            ProviderConfig.UNREACHABLE_CONNECT_TIMEOUT_SECONDS
+            minOf(ProviderConfig.UNREACHABLE_CONNECT_TIMEOUT_SECONDS, config.networkBudget.connectTimeoutSeconds)
         } else {
-            NETWORK_CONNECT_TIMEOUT_SECONDS
+            config.networkBudget.connectTimeoutSeconds
         }
 
     internal fun buildClient(): OkHttpClient {
@@ -2174,13 +2177,11 @@ class OpenAiCompatibleClient(
 
     companion object {
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
-        private const val RETRY_DELAY_MS = 3000L
         internal const val OPENROUTER_TRANSCRIPTION_MAX_RETRIES = 0
         private const val OPENROUTER_TRANSCRIPTION_TEMPERATURE = 0.0
 
         /** The providers behind OpenRouter's speech models that take a `prompt` (see [openRouterProviderOptions]). */
         private val OPENROUTER_PROMPT_PROVIDERS = listOf("openai", "groq", "deepinfra", "together")
-        internal const val NETWORK_CONNECT_TIMEOUT_SECONDS = 8L
         private val HTTP_CLIENTS = ConcurrentHashMap<HttpClientKey, OkHttpClient>()
 
         private data class HttpClientKey(
@@ -2189,6 +2190,7 @@ class OpenAiCompatibleClient(
             // would hand the import the two-minute client the keyboard built first — or the other way
             // round (issue #337).
             val callTimeoutSeconds: Long?,
+            val budget: NetworkBudget,
             val proxy: ProxyConfig?,
             val trustUserCerts: Boolean,
             val clientCertAlias: String,
@@ -2439,6 +2441,7 @@ class OpenAiCompatibleClient(
             callTimeoutSeconds: Long? = null,
             /** Another provider takes over if this one cannot be reached — see [ProviderConfig.handOverUnreachable]. */
             handOverUnreachable: Boolean = false,
+            networkBudget: NetworkBudget = NetworkBudget.DEFAULT,
         ): OpenAiCompatibleClient = OpenAiCompatibleClient(
             ProviderConfig(
                 baseUrl = baseUrlOverride ?: preset.baseUrl,
@@ -2451,6 +2454,7 @@ class OpenAiCompatibleClient(
                 useChatAudio = useChatAudio,
                 trustUserCerts = trustUserCerts,
                 clientCertAlias = clientCertAlias,
+                networkBudget = networkBudget,
                 curatedModels = (preset.curatedTranscriptionModels + preset.curatedChatModels).distinct(),
                 handOverUnreachable = handOverUnreachable,
             )

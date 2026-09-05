@@ -2245,7 +2245,12 @@ object DictateController {
                         tighteningSymbols = appContext.transcriptTighteningSymbols(),
                     ).transcribe(request)
                 } else {
+                    // Fast offline fallback: with a downloaded model standing by, an unreachable provider
+                    // costs a hand-off rather than the dictation, so stop reaching out after seconds
+                    // instead of ~41 of them — and not at all when the OS already says we are offline.
+                    val fastFallback = FastFallback.armed(appContext, preset)
                     try {
+                        if (fastFallback) FastFallback.requireOnline(appContext)
                         OpenAiCompatibleClient.from(
                             preset, apiKey,
                             baseUrlOverride = baseUrlOverrideFor(account),
@@ -2256,6 +2261,7 @@ object DictateController {
                             clientCertAlias = account.clientCertAlias,
                             timeoutSeconds = prefs.dictate.requestTimeout.get().toLong(),
                             handOverUnreachable = fallbackId != null,
+                            networkBudget = FastFallback.budget(fastFallback),
                         ).transcribe(
                             request,
                             onRetry = { attempt -> setTranscribing(attempt, via = via) },
@@ -3543,7 +3549,11 @@ object DictateController {
                 }
             } else {
                 if (apiKey.isBlank() && requiresKey(account)) return null
+                // Same fast hand-off as the single-shot path: a segment is worth even less waiting,
+                // because the ones behind it are queueing up while this one stalls.
+                val fastFallback = FastFallback.armed(appContext, preset)
                 try {
+                    if (fastFallback) FastFallback.requireOnline(appContext)
                     OpenAiCompatibleClient.from(
                         preset, apiKey,
                         baseUrlOverride = baseUrlOverrideFor(account),
@@ -3553,6 +3563,7 @@ object DictateController {
                         clientCertAlias = account.clientCertAlias,
                         timeoutSeconds = prefs.dictate.requestTimeout.get().toLong(),
                         handOverUnreachable = fallbackId != null,
+                        networkBudget = FastFallback.budget(fastFallback),
                     ).transcribe(request)
                 } catch (e: DictateApiException) {
                     // A provider that will not take the m4a gets the WAV instead (#281); everything else
