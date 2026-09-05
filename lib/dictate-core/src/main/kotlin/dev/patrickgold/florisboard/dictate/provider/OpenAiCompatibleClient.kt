@@ -77,6 +77,7 @@ class OpenAiCompatibleClient(
             HttpClientKey(
                 timeoutSeconds = config.timeoutSeconds,
                 callTimeoutSeconds = config.callTimeoutSeconds,
+                budget = config.networkBudget,
                 proxy = config.proxy,
                 trustUserCerts = config.trustUserCerts,
             )
@@ -1236,7 +1237,7 @@ class OpenAiCompatibleClient(
 
     internal suspend fun executeForBody(
         request: Request,
-        maxRetries: Int = 3,
+        maxRetries: Int = config.networkBudget.maxRetries,
         onRetry: (attempt: Int) -> Unit = {},
         diagnosticLabel: String? = null,
     ): String {
@@ -1282,7 +1283,7 @@ class OpenAiCompatibleClient(
                 if (mapped.isRetryable && attempt < maxRetries && withinBudget) {
                     attempt++
                     onRetry(attempt + 1) // report the upcoming attempt (2nd, 3rd, …)
-                    delay(RETRY_DELAY_MS)
+                    delay(config.networkBudget.retryDelayMs)
                 } else {
                     throw mapped
                 }
@@ -1404,7 +1405,7 @@ class OpenAiCompatibleClient(
             .callTimeout(Duration.ofMillis(attemptBudgetMillis))
             // Connection establishment needs a short budget per route. Uploading a long recording and
             // waiting for the model keep the full configured call/read/write timeout below.
-            .connectTimeout(NETWORK_CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            .connectTimeout(config.networkBudget.connectTimeoutSeconds, TimeUnit.SECONDS)
             // OkHttp 5 Happy Eyeballs races IPv6/IPv4 routes 250 ms apart and keeps the first winner.
             .fastFallback(true)
             .readTimeout(timeout)
@@ -1862,10 +1863,8 @@ class OpenAiCompatibleClient(
 
     companion object {
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
-        private const val RETRY_DELAY_MS = 3000L
         internal const val OPENROUTER_TRANSCRIPTION_MAX_RETRIES = 0
         private const val OPENROUTER_TRANSCRIPTION_TEMPERATURE = 0.0
-        internal const val NETWORK_CONNECT_TIMEOUT_SECONDS = 8L
         private val HTTP_CLIENTS = ConcurrentHashMap<HttpClientKey, OkHttpClient>()
 
         private data class HttpClientKey(
@@ -1874,6 +1873,7 @@ class OpenAiCompatibleClient(
             // would hand the import the two-minute client the keyboard built first — or the other way
             // round (issue #337).
             val callTimeoutSeconds: Long?,
+            val budget: NetworkBudget,
             val proxy: ProxyConfig?,
             val trustUserCerts: Boolean,
         )
@@ -2043,6 +2043,7 @@ class OpenAiCompatibleClient(
             timeoutSeconds: Long = ProviderConfig.DEFAULT_TIMEOUT_SECONDS,
             /** Whole-call budget where the default two minutes is too short — see [ProviderConfig.callTimeoutSeconds]. */
             callTimeoutSeconds: Long? = null,
+            networkBudget: NetworkBudget = NetworkBudget.DEFAULT,
         ): OpenAiCompatibleClient = OpenAiCompatibleClient(
             ProviderConfig(
                 baseUrl = baseUrlOverride ?: preset.baseUrl,
@@ -2054,6 +2055,7 @@ class OpenAiCompatibleClient(
                 transcriptionApi = preset.transcriptionApi,
                 useChatAudio = useChatAudio,
                 trustUserCerts = trustUserCerts,
+                networkBudget = networkBudget,
                 curatedModels = (preset.curatedTranscriptionModels + preset.curatedChatModels).distinct(),
             )
         )
