@@ -13,6 +13,7 @@ package dev.patrickgold.florisboard.dictate
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.os.SystemClock
 import androidx.core.content.getSystemService
 import dev.patrickgold.florisboard.app.FlorisPreferenceStore
 import dev.patrickgold.florisboard.dictate.provider.DictateApiException
@@ -21,6 +22,7 @@ import dev.patrickgold.florisboard.dictate.provider.NetworkBudget
 import dev.patrickgold.florisboard.dictate.provider.ProviderPreset
 import dev.patrickgold.florisboard.dictate.provider.ProviderRegistry
 import dev.patrickgold.florisboard.dictate.provider.TranscriptionApi
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * How quickly a cloud transcription gives up in favour of the on-device engine (issue #104 follow-up).
@@ -69,7 +71,8 @@ object FastFallback {
 
     /**
      * Throws a connectivity error — the one the caller's existing fallback path already knows how to
-     * handle — when the OS says there is no usable internet, so the hand-off costs nothing at all.
+     * handle — when there is no point making the call: the OS says there is no usable internet, or this
+     * provider was unreachable moments ago.
      *
      * Airplane mode, a captive portal that was never signed into, mobile data switched off: in every one
      * of these the platform already knows the answer, and asking a socket to find it out again is three
@@ -82,7 +85,13 @@ object FastFallback {
      * the call proceed. It never reports offline on a doubt, because a false offline would silently
      * downgrade a perfectly good cloud transcription.
      */
-    fun requireOnline(context: Context) {
+    fun requireReachable(context: Context, preset: ProviderPreset) {
+        if (recentlyUnreachable(preset.id)) {
+            throw DictateApiException(
+                DictateApiException.Kind.NETWORK,
+                "Provider was unreachable moments ago; transcribing on-device instead.",
+            )
+        }
         val cm = context.getSystemService<ConnectivityManager>() ?: return
         val active = runCatching { cm.activeNetwork }.getOrElse { return }
         val offline = if (active == null) {
@@ -102,4 +111,41 @@ object FastFallback {
             )
         }
     }
+
+    /**
+     * Records that [providerId] could not be reached, so the next dictation does not pay to find out again.
+     *
+     * This covers the one case the shortened connect budget cannot: a server that completes the TCP
+     * handshake and then says nothing. From outside there is no telling that apart from a model thinking
+     * hard about a long recording, so the first dictation has to wait out the full request timeout — but
+     * the second does not have to repeat it. Called where the hand-off actually happens, so it only ever
+     * remembers a failure the on-device engine was able to absorb.
+     */
+    fun noteUnreachable(providerId: String) {
+        lastUnreachable.set(providerId to SystemClock.elapsedRealtime())
+    }
+
+    /**
+     * Whether [providerId] failed recently enough to skip.
+     *
+     * Deliberately short, and deliberately without a matching "it worked" signal to clear it. The window
+     * expiring *is* the recovery: at worst one dictation goes on-device while the provider is already back,
+     * and the one after that finds it. A breaker that stayed open until something proved otherwise would
+     * need that proof to come from a call it is refusing to make.
+     */
+    private fun recentlyUnreachable(providerId: String): Boolean {
+        val (id, at) = lastUnreachable.get() ?: return false
+        if (id != providerId) return false
+        if (SystemClock.elapsedRealtime() - at > UNREACHABLE_COOLDOWN_MS) {
+            lastUnreachable.set(null)
+            return false
+        }
+        return true
+    }
+
+    /** How long a provider stays skipped after it could not be reached. */
+    private const val UNREACHABLE_COOLDOWN_MS = 90_000L
+
+    /** The provider that last failed to answer, and when — process-lifetime only, by design. */
+    private val lastUnreachable = AtomicReference<Pair<String, Long>?>(null)
 }
