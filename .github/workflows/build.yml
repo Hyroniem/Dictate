@@ -18,6 +18,9 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # Well over a healthy run (~15 min), well under the six hours GitHub would otherwise let a hung
+    # test hold the job for. A rebase check is worth nothing if the answer arrives tomorrow.
+    timeout-minutes: 45
     env:
       # Lifted into env because the `secrets` context cannot be read from a step's `if:`.
       KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
