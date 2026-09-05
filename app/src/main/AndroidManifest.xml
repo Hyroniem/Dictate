@@ -5,6 +5,10 @@
     <!-- Permission needed to vibrate if the user has key press vibration enabled -->
     <uses-permission android:name="android.permission.VIBRATE"/>
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- Read whether there is a validated internet connection, so a dictation with a downloaded
+         on-device model behind it hands over immediately instead of waiting out a socket that the
+         system already knows cannot connect. Normal permission: no runtime prompt. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <!-- Buying credit packs for Dictate Cloud. The billing library declares this itself, but
          stating it here keeps it visible: without it in the uploaded build, the Play Console
          will not let in-app products be created at all. -->

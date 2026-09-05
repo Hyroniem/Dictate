@@ -1649,7 +1649,12 @@ object DictateController {
                     LocalTranscriptionProvider(LocalTranscriptionProvider.modelDir(appContext, model))
                         .transcribe(request)
                 } else {
+                    // Fast offline fallback: with a downloaded model standing by, an unreachable provider
+                    // costs a hand-off rather than the dictation, so stop reaching out after seconds
+                    // instead of ~41 of them — and not at all when the OS already says we are offline.
+                    val fastFallback = FastFallback.armed(appContext, preset)
                     try {
+                        if (fastFallback) FastFallback.requireOnline(appContext)
                         OpenAiCompatibleClient.from(
                             preset, apiKey,
                             baseUrlOverride = baseUrlOverrideFor(account),
@@ -1657,6 +1662,7 @@ object DictateController {
                             // Single-call multimodal (issue #130): route audio through chat/completions.
                             useChatAudio = chatAudio,
                             trustUserCerts = prefs.dictate.trustUserCertificates.get(),
+                            networkBudget = FastFallback.budget(fastFallback),
                         ).transcribe(
                             request,
                             onRetry = { attempt -> _state.value = UiState.Transcribing(attempt) },
@@ -2434,13 +2440,18 @@ object DictateController {
                 }
             } else {
                 if (apiKey.isBlank() && requiresKey(account)) return null
+                // Same fast hand-off as the single-shot path: a segment is worth even less waiting,
+                // because the ones behind it are queueing up while this one stalls.
+                val fastFallback = FastFallback.armed(appContext, preset)
                 try {
+                    if (fastFallback) FastFallback.requireOnline(appContext)
                     OpenAiCompatibleClient.from(
                         preset, apiKey,
                         baseUrlOverride = baseUrlOverrideFor(account),
                         proxy = prefs.dictate.dictateProxyConfig(),
                         useChatAudio = false,
                         trustUserCerts = prefs.dictate.trustUserCertificates.get(),
+                        networkBudget = FastFallback.budget(fastFallback),
                     ).transcribe(request)
                 } catch (e: DictateApiException) {
                     // A provider that will not take the m4a gets the WAV instead (#281); everything else

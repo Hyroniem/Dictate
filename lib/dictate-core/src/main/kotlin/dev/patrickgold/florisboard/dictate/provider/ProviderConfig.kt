@@ -27,6 +27,12 @@ data class ProviderConfig(
     val extraHeaders: Map<String, String> = emptyMap(),
     val proxy: ProxyConfig? = null,
     val timeoutSeconds: Long = 120,
+    /**
+     * How long this call may spend trying to *reach* the endpoint (connect budget + retries), as opposed
+     * to [timeoutSeconds], which budgets a request already in flight. Callers with an on-device fallback
+     * ready pass [NetworkBudget.FAST_FAIL] here so an unreachable provider hands over in seconds.
+     */
+    val networkBudget: NetworkBudget = NetworkBudget.DEFAULT,
     val transcriptionApi: TranscriptionApi = TranscriptionApi.OPENAI_MULTIPART,
     /**
      * Single-call multimodal transcription (issue #130): when true, audio is sent to `chat/completions`
