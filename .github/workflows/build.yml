@@ -51,6 +51,22 @@ jobs:
           keyPassword=$KEY_PASSWORD
           EOF
 
+      # sherpa-onnx (on-device STT) ships as reproducible release artifacts that are deliberately not
+      # committed, and :app:verifySherpaOnnxLibs fails the build without them. Cached on the pinned
+      # version in the script, so a rebase that does not move it costs one restore instead of 50 MB.
+      - name: Cache vendored native libs
+        id: sherpa-cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            app/libs
+            app/src/main/jniLibs
+          key: sherpa-${{ hashFiles('tools/fetch-sherpa-onnx.sh') }}
+
+      - name: Fetch vendored native libs
+        if: steps.sherpa-cache.outputs.cache-hit != 'true'
+        run: tools/fetch-sherpa-onnx.sh
+
       - name: Unit tests
         run: ./gradlew --no-daemon testDebugUnitTest
 
