@@ -63,6 +63,18 @@ alongside the Play release rather than colliding with it. That is not cosmetic: 
 signed with a different key, and Android refuses to install it over one signed with another — the only
 alternative would be uninstalling the app that currently works.
 
+The label lives in `app/src/release/res/values/strings.xml` as an override of `floris_app_name`, not
+in `app_name`. `app_name` is translated into some thirty locales, so editing `values/strings.xml`
+renames the app for English only and leaves every other device showing the same "Dictate" as the store
+build. `floris_app_name` is what every manifest label actually points at and is translated nowhere;
+the `debug` and `beta` source sets already override it the same way. Verify a build with:
+
+```
+aapt2 dump badging app-release.apk | grep -E '^package:|application-label'
+```
+
+All 97 locale labels should read `Dictate (Fork)`.
+
 Consequences worth knowing:
 
 - Both appear separately in Android's keyboard list, under names that tell them apart.
@@ -98,7 +110,8 @@ Without them the code paths are never entered, which is what makes the patch saf
 | `52ffd525` | raise the test JVM heap to 2 GB (upstream bug, see below) |
 | `6116e5ff` | CI: read the `STORE_PASSWORD` secret, assemble `:app` only |
 | `6f3ca490` | CI: skip `lintVitalRelease` (upstream false positive, see below) |
-| `66b2cddf` | fork application id + label, so it installs beside the store version |
+| `66b2cddf` | fork application id, so it installs beside the store version |
+| `bad8ca48` | fork app label via a `release` source set override |
 
 ### Footprint in upstream files
 
