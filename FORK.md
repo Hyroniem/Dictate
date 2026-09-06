@@ -56,6 +56,25 @@ That leaves one honest slow case: a server that completes the TCP handshake and 
 still costs the full request timeout on the first dictation, because from the outside that is
 indistinguishable from a model thinking hard. The circuit breaker covers the second.
 
+### Installing beside the store version
+
+The fork builds as `net.devemperor.dictate.fork`, labelled **Dictate (Fork)**, so it installs
+alongside the Play release rather than colliding with it. That is not cosmetic: a self-built APK is
+signed with a different key, and Android refuses to install it over one signed with another — the only
+alternative would be uninstalling the app that currently works.
+
+Consequences worth knowing:
+
+- Both appear separately in Android's keyboard list, under names that tell them apart.
+- The id is deliberately a *suffix* of the original, because `Restore.PACKAGE_NAME` identifies a
+  genuine Dictate backup by prefix. Backups therefore move between the two in both directions.
+- The Wear module carries the same id — the Wearable data layer pairs watch and phone by package name.
+- **Dictate Cloud in-app purchases do not work under this id.** Play billing is bound to the package it
+  was sold under. Bring-your-own-key providers and the on-device models are unaffected; if you rely on
+  Cloud credit, keep using the Play build for that — which side-by-side installation makes possible.
+- It is a separate app, so it starts with empty settings. Restore a backup from the store version to
+  carry yours over.
+
 ### Prerequisites
 
 None of this changes any behaviour unless **both** are true:
@@ -79,6 +98,7 @@ Without them the code paths are never entered, which is what makes the patch saf
 | `52ffd525` | raise the test JVM heap to 2 GB (upstream bug, see below) |
 | `6116e5ff` | CI: read the `STORE_PASSWORD` secret, assemble `:app` only |
 | `6f3ca490` | CI: skip `lintVitalRelease` (upstream false positive, see below) |
+| `66b2cddf` | fork application id + label, so it installs beside the store version |
 
 ### Footprint in upstream files
 
@@ -117,8 +137,9 @@ reapply by hand.
 ## CI
 
 `.github/workflows/build.yml` runs on every push: unit tests, then `:app:assembleRelease`, then
-uploads the APK as an artifact. A full green run takes about 15 minutes and produces a ~46 MB signed
-APK, retained for 90 days.
+uploads the APK as an artifact. A full green run takes about 15-17 minutes and produces a signed
+~104 MB APK (a ~46 MB artifact download), retained for 90 days. Fetch it with
+`gh run download <run-id> --repo Hyroniem/Dictate`, or from the Actions tab.
 
 `lintVitalRelease` is skipped — see issue #332 below. That is not free: a genuinely fatal lint issue in
 a release build will not be reported by this job.
