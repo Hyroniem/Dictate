@@ -57,7 +57,9 @@ configure<ApplicationExtension> {
         // Same applicationId as the phone app so Play delivers this as the "Wear OS" APK of the
         // same listing. Play still requires a unique versionCode per APK across the form factors;
         // we keep the Wear codes in a separate high band (see versionCode below).
-        applicationId = "net.devemperor.dictate"
+        // Must match the phone app, including the fork suffix: the Wearable data layer pairs the
+        // watch and phone apps by package name.
+        applicationId = "net.devemperor.dictate.fork"
         minSdk = wearMinSdk
         targetSdk = projectTargetSdk.toInt()
         // Offset the Wear versionCode into its own band so it never collides with the phone APK

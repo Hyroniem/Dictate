@@ -68,7 +68,11 @@ configure<ApplicationExtension> {
     }
 
     defaultConfig {
-        applicationId = "net.devemperor.dictate"
+        // Fork identity: a different application id so this build installs beside the Play version
+        // instead of refusing to (different signing key) or replacing it. Kept as a suffix of the
+        // original on purpose — Restore.PACKAGE_NAME does a prefix check, so backups still move
+        // between the two in both directions.
+        applicationId = "net.devemperor.dictate.fork"
         minSdk = projectMinSdk.toInt()
         targetSdk = projectTargetSdk.toInt()
         versionCode = projectVersionCode.toInt()
