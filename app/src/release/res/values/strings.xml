@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      The name this build shows everywhere Android names it: launcher, app info, the keyboard picker,
+      the spell checker, the accessibility service notification.
+
+      It has to be floris_app_name and not app_name, even though main/ defines the former as an alias
+      of the latter. app_name is translated into some thirty locales, so overriding only values/
+      changes the name for exactly one language and leaves every other device showing the same
+      "Dictate" as the store build — which is the opposite of the point of a fork that installs
+      beside it. floris_app_name is translated nowhere, and the debug and beta source sets already
+      override it this same way.
+    -->
+    <item name="floris_app_name" translatable="false" type="string">Dictate (Fork)</item>
+</resources>
