@@ -102,16 +102,19 @@ Without them the code paths are never entered, which is what makes the patch saf
 
 | commit | what |
 |---|---|
-| `a7e19dcb` | pre-flight check + per-call network budget |
-| `6435f8a1` | circuit breaker (90 s) |
-| `a4ab645d` | GitHub Actions: build, tests, signed APK artifact |
-| `0f425a98` | CI: fetch the vendored sherpa-onnx libs |
-| `62ecf71f` | CI: 45-minute job timeout |
-| `52ffd525` | raise the test JVM heap to 2 GB (upstream bug, see below) |
-| `6116e5ff` | CI: read the `STORE_PASSWORD` secret, assemble `:app` only |
-| `6f3ca490` | CI: skip `lintVitalRelease` (upstream false positive, see below) |
-| `66b2cddf` | fork application id, so it installs beside the store version |
-| `bad8ca48` | fork app label via a `release` source set override |
+| `c0b40eaf` | pre-flight check + per-call network budget |
+| `a219178c` | circuit breaker (90 s) |
+| `1d2c3747` | GitHub Actions: build, tests, signed APK artifact |
+| `e1e90db1` | CI: fetch the vendored sherpa-onnx libs |
+| `b0ba57cd` | CI: 45-minute job timeout |
+| `1be8b36f` | CI: read the `STORE_PASSWORD` secret, assemble `:app` only |
+| `43f10cbd` | fork application id, so it installs beside the store version |
+| `202aed0e` | fork app label via a `release` source set override |
+
+The test-heap and lint-baseline workarounds that used to live here are gone: upstream fixed both
+directly (`1232346a`, `d905f9b2`, see below), which made the local patches conflict on rebase. They
+were dropped rather than reapplied on top of the real fix; the workflow's `-x lintVitalRelease` was
+then removed in `21f8082d` for the same reason.
 
 ### Footprint in upstream files
 
@@ -149,13 +152,11 @@ reapply by hand.
 
 ## CI
 
-`.github/workflows/build.yml` runs on every push: unit tests, then `:app:assembleRelease`, then
-uploads the APK as an artifact. A full green run takes about 15-17 minutes and produces a signed
-~104 MB APK (a ~46 MB artifact download), retained for 90 days. Fetch it with
-`gh run download <run-id> --repo Hyroniem/Dictate`, or from the Actions tab.
-
-`lintVitalRelease` is skipped — see issue #332 below. That is not free: a genuinely fatal lint issue in
-a release build will not be reported by this job.
+`.github/workflows/build.yml` runs on every push: unit tests, then `:app:assembleRelease` (including
+`lintVitalRelease`, no longer skipped — see issue #332 below), then uploads the APK as an artifact. A
+full green run takes about 15-17 minutes and produces a signed ~104 MB APK (a ~46 MB artifact
+download), retained for 90 days. Fetch it with `gh run download <run-id> --repo Hyroniem/Dictate`, or
+from the Actions tab.
 
 Signing is optional and read from repository secrets — `KEYSTORE_BASE64`, `STORE_PASSWORD`,
 `KEY_ALIAS`, `KEY_PASSWORD`. With them the APK upgrades in place on the phone; without them
@@ -168,28 +169,28 @@ fork is ever made private.
 
 ## Upstream
 
-Both filed against DevEmperor/DictateKeyboard:
+Filed against DevEmperor/DictateKeyboard:
 
 - **[discussion #330](https://github.com/DevEmperor/DictateKeyboard/discussions/330)** — the proposal
   to take this behaviour upstream. If accepted, most of this fork disappears.
 - **[issue #331](https://github.com/DevEmperor/DictateKeyboard/issues/331)** — `:app:testDebugUnitTest`
-  runs out of heap on a clean v6.1.2 checkout, in `ImeWindowControllerEditorMoveTest`. Reproduced on a
-  clean runner with none of this fork's code; `maxHeapSize = "2g"` fixes it. Commit `52ffd525` carries
-  that fix here until upstream takes it.
+  ran out of heap on a clean checkout, in `ImeWindowControllerEditorMoveTest`. **Fixed upstream** in
+  `1232346a` (`maxHeapSize = "2g"`); the local workaround was dropped on the rebase that pulled it in.
 - **[issue #332](https://github.com/DevEmperor/DictateKeyboard/issues/332)** — `:app:assembleRelease`
-  fails on a clean checkout, because `lint { baseline = file("lint.xml") }` points at a lint *config*
+  failed on a clean checkout, because `lint { baseline = file("lint.xml") }` pointed at a lint *config*
   file rather than a baseline, so a false-positive `InvalidFragmentVersionForActivityResult` on a
-  `ComponentActivity` becomes fatal. Worked around in the workflow by commit `6f3ca490`.
+  `ComponentActivity` became fatal. **Fixed upstream** in `d905f9b2`; the workflow's `-x
+  lintVitalRelease` skip was removed in `21f8082d` once that landed.
 
 ---
 
 ## Open actions
 
-- [ ] Watch #330. If the maintainer takes the change, drop `a7e19dcb`/`6435f8a1` and go back to
+- [x] Watch #331. Fixed upstream (`1232346a`) and merged in on the 2026-09-07 rebase.
+- [x] Watch #332. Fixed upstream (`d905f9b2`) and merged in on the 2026-09-07 rebase; the workflow
+      skip was removed in `21f8082d`.
+- [ ] Watch #330. If the maintainer takes the change, drop `c0b40eaf`/`a219178c` and go back to
       running upstream directly.
-- [ ] Watch #331. When upstream sets a test heap, drop `52ffd525` on the next rebase.
-- [ ] Watch #332. When upstream separates the lint baseline from the config, drop the
-      `-x lintVitalRelease` from the workflow so release lint runs again.
 - [ ] Push the archived pre-rewrite fork history if it is worth keeping:
       `git push origin archive/legacy-fork`. The old fork sat on the now-frozen `legacy-java` branch
       and shares no history with the current codebase, so it can never be merged forward.
