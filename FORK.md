@@ -29,7 +29,7 @@ already on the device, buys nothing.
 
 ## What it does
 
-| situation | upstream v6.1.2 | this fork |
+| situation | upstream v6.1.2–v6.3.0 | this fork |
 |---|---|---|
 | airplane mode | ~9 s | immediate |
 | provider unreachable | ~41 s | ~3 s |
@@ -102,19 +102,24 @@ Without them the code paths are never entered, which is what makes the patch saf
 
 | commit | what |
 |---|---|
-| `c0b40eaf` | pre-flight check + per-call network budget |
-| `a219178c` | circuit breaker (90 s) |
-| `1d2c3747` | GitHub Actions: build, tests, signed APK artifact |
-| `e1e90db1` | CI: fetch the vendored sherpa-onnx libs |
-| `b0ba57cd` | CI: 45-minute job timeout |
-| `1be8b36f` | CI: read the `STORE_PASSWORD` secret, assemble `:app` only |
-| `43f10cbd` | fork application id, so it installs beside the store version |
-| `202aed0e` | fork app label via a `release` source set override |
+| `e9275f7b` | pre-flight check + per-call network budget |
+| `c0f7dc77` | circuit breaker (90 s) |
+| `3e8dd7d4` | GitHub Actions: build, tests, signed APK artifact |
+| `da9d8899` | CI: fetch the vendored sherpa-onnx libs |
+| `80526d3c` | CI: 45-minute job timeout |
+| `64ba1fdd` | CI: read the `STORE_PASSWORD` secret, assemble `:app` only |
+| `a1a0a234` | fork application id, so it installs beside the store version |
+| `3db0f255` | fork app label via a `release` source set override |
 
 The test-heap and lint-baseline workarounds that used to live here are gone: upstream fixed both
 directly (`1232346a`, `d905f9b2`, see below), which made the local patches conflict on rebase. They
 were dropped rather than reapplied on top of the real fix; the workflow's `-x lintVitalRelease` was
-then removed in `21f8082d` for the same reason.
+then removed in `adfb25d5` for the same reason.
+
+Rebased onto v6.3.0 on 2026-09-23: five conflicts, all in the first commit, all two sides adding a line
+at the same spot (upstream's `callTimeoutSeconds` beside this fork's `networkBudget`); both kept. The
+retry and connect budget is unchanged in v6.3.0 and it still has no pre-flight or circuit breaker, so the
+patch is still needed. The realtime dictation mode added upstream is not covered by the fast fallback.
 
 ### Footprint in upstream files
 
@@ -126,7 +131,7 @@ This is what determines rebase cost. New files cannot conflict; only these can.
 | `app/src/main/kotlin/.../dictate/DictateController.kt` | +14 |
 | `lib/dictate-core/src/main/kotlin/.../provider/OpenAiCompatibleClient.kt` | +7 / −5 |
 | `lib/dictate-core/src/main/kotlin/.../provider/ProviderConfig.kt` | +6 |
-| `app/build.gradle.kts` | +4 |
+| `app/build.gradle.kts` | +5 / −1 |
 | **new** `.../provider/NetworkBudget.kt`, `.../dictate/FastFallback.kt` | 205 |
 
 The manifest line is `ACCESS_NETWORK_STATE` — a normal permission, no runtime prompt, but it does
@@ -138,9 +143,14 @@ appear in the app's permission list.
 
 ```bash
 git fetch upstream --tags
-git rebase --onto v6.2.0 v6.1.2 fast-fallback
+git rebase --onto <new-tag> $(git merge-base fast-fallback <new-tag>) fast-fallback
 git push --force-with-lease origin fast-fallback
 ```
+
+The old base is the merge-base, not the tag the fork was last "on": a rebase that pulled in part of
+upstream leaves the fork sitting between two tags, and `--onto <new-tag> <old-tag>` would then replay
+those upstream commits as if they were the fork's own. Check `git log --oneline <merge-base>..fast-fallback`
+lists only the fork's commits before running it.
 
 Then let CI answer whether it still builds. Keep the changes as few commits touching as few upstream
 lines as possible — that property is the whole maintenance strategy, not a nicety.
@@ -180,7 +190,7 @@ Filed against DevEmperor/DictateKeyboard:
   failed on a clean checkout, because `lint { baseline = file("lint.xml") }` pointed at a lint *config*
   file rather than a baseline, so a false-positive `InvalidFragmentVersionForActivityResult` on a
   `ComponentActivity` became fatal. **Fixed upstream** in `d905f9b2`; the workflow's `-x
-  lintVitalRelease` skip was removed in `21f8082d` once that landed.
+  lintVitalRelease` skip was removed in `adfb25d5` once that landed.
 
 ---
 
@@ -188,8 +198,8 @@ Filed against DevEmperor/DictateKeyboard:
 
 - [x] Watch #331. Fixed upstream (`1232346a`) and merged in on the 2026-09-07 rebase.
 - [x] Watch #332. Fixed upstream (`d905f9b2`) and merged in on the 2026-09-07 rebase; the workflow
-      skip was removed in `21f8082d`.
-- [ ] Watch #330. If the maintainer takes the change, drop `c0b40eaf`/`a219178c` and go back to
+      skip was removed in `adfb25d5`.
+- [ ] Watch #330. If the maintainer takes the change, drop `e9275f7b`/`c0f7dc77` and go back to
       running upstream directly.
 - [ ] Push the archived pre-rewrite fork history if it is worth keeping:
       `git push origin archive/legacy-fork`. The old fork sat on the now-frozen `legacy-java` branch
