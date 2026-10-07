@@ -8,8 +8,16 @@ name: build
 
 on:
   push:
+    # sync/** is the upstream-sync workflow's staging branch; it builds that itself, through workflow_call.
+    branches-ignore: ['sync/**']
   pull_request:
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: Branch or commit to build (defaults to the triggering ref)
+        type: string
+        default: ''
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -30,6 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.ref }}
           # The build stamps the APK version with the short commit hash, which needs real history.
           fetch-depth: 0
 
@@ -54,21 +63,32 @@ jobs:
           keyPassword=$KEY_PASSWORD
           EOF
 
-      # sherpa-onnx (on-device STT) ships as reproducible release artifacts that are deliberately not
-      # committed, and :app:verifySherpaOnnxLibs fails the build without them. Cached on the pinned
-      # version in the script, so a rebase that does not move it costs one restore instead of 50 MB.
+      # Native libraries the build refuses to run without, and which are deliberately not committed:
+      # sherpa-onnx (on-device STT) ships as reproducible release artifacts, and since v6.4 Bergamot
+      # (on-device translation, :app:verifyBergamotLib) is compiled from Mozilla's sources. Cached on the
+      # scripts that pin both, so a rebase that moves neither costs one restore instead of a 50 MB
+      # download and a native build.
       - name: Cache vendored native libs
-        id: sherpa-cache
+        id: native-cache
         uses: actions/cache@v4
         with:
           path: |
             app/libs
             app/src/main/jniLibs
-          key: sherpa-${{ hashFiles('tools/fetch-sherpa-onnx.sh') }}
+          key: native-${{ hashFiles('tools/fetch-sherpa-onnx.sh', 'tools/bergamot/**', 'gradle/tools.versions.toml') }}
 
-      - name: Fetch vendored native libs
-        if: steps.sherpa-cache.outputs.cache-hit != 'true'
+      - name: Fetch sherpa-onnx libs
+        if: steps.native-cache.outputs.cache-hit != 'true'
         run: tools/fetch-sherpa-onnx.sh
+
+      # The script wants the exact NDK and CMake that gradle/tools.versions.toml pins.
+      - name: Build Bergamot
+        if: steps.native-cache.outputs.cache-hit != 'true'
+        run: |
+          NDK_VERSION="$(grep '^ndk ' gradle/tools.versions.toml | sed -E 's/.*"(.*)".*/\1/')"
+          CMAKE_VERSION="$(grep '^cmake ' gradle/tools.versions.toml | sed -E 's/.*"(.*)".*/\1/')"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;$NDK_VERSION" "cmake;$CMAKE_VERSION" > /dev/null
+          tools/bergamot/build-android.sh
 
       - name: Unit tests
         run: ./gradlew --no-daemon testDebugUnitTest
