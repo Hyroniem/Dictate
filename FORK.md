@@ -102,24 +102,35 @@ Without them the code paths are never entered, which is what makes the patch saf
 
 | commit | what |
 |---|---|
-| `e9275f7b` | pre-flight check + per-call network budget |
-| `c0f7dc77` | circuit breaker (90 s) |
-| `3e8dd7d4` | GitHub Actions: build, tests, signed APK artifact |
-| `da9d8899` | CI: fetch the vendored sherpa-onnx libs |
-| `80526d3c` | CI: 45-minute job timeout |
-| `64ba1fdd` | CI: read the `STORE_PASSWORD` secret, assemble `:app` only |
-| `a1a0a234` | fork application id, so it installs beside the store version |
-| `3db0f255` | fork app label via a `release` source set override |
+| `e7f83a12` | pre-flight check + per-call network budget |
+| `f36b5899` | circuit breaker (90 s) |
+| `89481e32` | GitHub Actions: build, tests, signed APK artifact |
+| `560adf9e` | CI: fetch the vendored sherpa-onnx libs |
+| `1fbc4178` | CI: 45-minute job timeout |
+| `9b00ffd0` | CI: read the `STORE_PASSWORD` secret, assemble `:app` only |
+| `c3c6453a` | fork application id, so it installs beside the store version |
+| `62d5bce1` | fork app label via a `release` source set override |
+| `13c6c5d5` | CI: build Bergamot (on-device translation), required since v6.4.0 |
+| `9a204cbc` | CI: automatic rebase onto each new upstream release |
+
+Hashes are as of the v6.4.0 rebase; every rebase rewrites them, so after an automatic one
+`git log --oneline $(git merge-base main <tag>)..main` is the authoritative list.
 
 The test-heap and lint-baseline workarounds that used to live here are gone: upstream fixed both
 directly (`1232346a`, `d905f9b2`, see below), which made the local patches conflict on rebase. They
 were dropped rather than reapplied on top of the real fix; the workflow's `-x lintVitalRelease` was
-then removed in `adfb25d5` for the same reason.
+then removed in `cef2c779` for the same reason.
 
 Rebased onto v6.3.0 on 2026-09-23: five conflicts, all in the first commit, all two sides adding a line
 at the same spot (upstream's `callTimeoutSeconds` beside this fork's `networkBudget`); both kept. The
 retry and connect budget is unchanged in v6.3.0 and it still has no pre-flight or circuit breaker, so the
 patch is still needed. The realtime dictation mode added upstream is not covered by the fast fallback.
+
+Rebased onto v6.4.0 on 2026-10-07: no conflicts. The retry and connect budget and
+`localFallbackProvider`'s conditions are unchanged in v6.4.0, so the patch still applies as written.
+v6.4.0 makes the build depend on a natively compiled Bergamot library, which CI now builds
+(`13c6c5d5`). xAI's new `stt` transcription goes through `executeForBody` like the others, so it gets
+the fast-fail budget too.
 
 ### Footprint in upstream files
 
@@ -152,6 +163,9 @@ upstream leaves the fork sitting between two tags, and `--onto <new-tag> <old-ta
 those upstream commits as if they were the fork's own. Check `git log --oneline <merge-base>..fast-fallback`
 lists only the fork's commits before running it.
 
+Normally you do not run this yourself: `upstream-sync.yml` does it (see **Automatic upstream sync**
+below). By hand, it is for when that workflow reports a conflict.
+
 Then let CI answer whether it still builds. Keep the changes as few commits touching as few upstream
 lines as possible — that property is the whole maintenance strategy, not a nicety.
 
@@ -172,8 +186,34 @@ Signing is optional and read from repository secrets — `KEYSTORE_BASE64`, `STO
 `KEY_ALIAS`, `KEY_PASSWORD`. With them the APK upgrades in place on the phone; without them
 `app/build.gradle.kts` falls back to an unsigned release on its own.
 
+Native libraries: `tools/fetch-sherpa-onnx.sh` downloads sherpa-onnx, and since v6.4.0
+`tools/bergamot/build-android.sh` compiles Bergamot with the NDK and CMake versions pinned in
+`gradle/tools.versions.toml`. Both land in `app/libs` / `app/src/main/jniLibs` and are cached on the
+scripts that pin them, so only a run after one of those changes pays for the native build.
+
 The repo is public, so Actions minutes and artifact storage are free. That stops being true if the
 fork is ever made private.
+
+### Automatic upstream sync
+
+`.github/workflows/upstream-sync.yml` runs daily (05:17 UTC) and on demand from the Actions tab:
+
+1. Looks for the newest `vX.Y.Z` tag on DevEmperor/DictateKeyboard that `main` does not contain.
+   Nothing new: it stops there.
+2. Rebases the fork onto that tag from the merge-base, exactly as in the section above, and pushes the
+   result to `sync/<tag>`.
+3. Builds `sync/<tag>` with `build.yml` (tests, release APK).
+4. Only if that is green, force-pushes it to `main` (with a lease on the `main` it started from) and
+   deletes `sync/<tag>`. The push to `main` triggers the regular build, whose artifact is the APK to
+   install.
+
+If the rebase conflicts or the build fails, `main` is left as it was and an issue titled
+"Upstream sync failed for <tag>" is opened (or commented on). Fix it by hand, then re-run the
+workflow, optionally with the tag as input.
+
+It needs a repository secret `SYNC_TOKEN`: a fine-grained personal access token for this repository
+with **Contents: read and write** and **Workflows: read and write**. The default `GITHUB_TOKEN` cannot
+do it, because the rebased commits touch `.github/workflows/`, which that token may never push.
 
 ---
 
@@ -190,7 +230,7 @@ Filed against DevEmperor/DictateKeyboard:
   failed on a clean checkout, because `lint { baseline = file("lint.xml") }` pointed at a lint *config*
   file rather than a baseline, so a false-positive `InvalidFragmentVersionForActivityResult` on a
   `ComponentActivity` became fatal. **Fixed upstream** in `d905f9b2`; the workflow's `-x
-  lintVitalRelease` skip was removed in `adfb25d5` once that landed.
+  lintVitalRelease` skip was removed in `cef2c779` once that landed.
 
 ---
 
@@ -198,13 +238,14 @@ Filed against DevEmperor/DictateKeyboard:
 
 - [x] Watch #331. Fixed upstream (`1232346a`) and merged in on the 2026-09-07 rebase.
 - [x] Watch #332. Fixed upstream (`d905f9b2`) and merged in on the 2026-09-07 rebase; the workflow
-      skip was removed in `adfb25d5`.
-- [ ] Watch #330. If the maintainer takes the change, drop `e9275f7b`/`c0f7dc77` and go back to
+      skip was removed in `cef2c779`.
+- [ ] Watch #330. If the maintainer takes the change, drop `e7f83a12`/`f36b5899` and go back to
       running upstream directly.
 - [ ] Push the archived pre-rewrite fork history if it is worth keeping:
       `git push origin archive/legacy-fork`. The old fork sat on the now-frozen `legacy-java` branch
       and shares no history with the current codebase, so it can never be merged forward.
-- [ ] Point `upstream` at the current name — the repository was renamed to `DictateKeyboard`:
-      `git remote set-url upstream https://github.com/DevEmperor/DictateKeyboard.git`
+- [x] Point `upstream` at the current name — the repository was renamed to `DictateKeyboard`
+      (`upstream-sync.yml` uses the new URL).
+- [ ] Add the `SYNC_TOKEN` secret, or the automatic upstream sync fails on its first step.
 - [ ] Before installing a fork build over the store version: take an in-app backup (Settings →
       Backup). Different signing key means a clean install.
