@@ -31,9 +31,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.util.concurrent.Executors
-import java.util.concurrent.ScheduledFuture
-import java.util.concurrent.TimeUnit
 
 /**
  * On-device speech-to-text (issue #104), powered by a bundled Whisper model running through sherpa-onnx.
@@ -187,7 +184,7 @@ class LocalTranscriptionProvider(
                         decodeOnce(recognizer, samples)
                     }
                 } finally {
-                    RecognizerCache.endUse()
+                    RecognizerCache.endUse(recognizer)
                 }
             } catch (e: DictateApiException) {
                 throw e
@@ -256,7 +253,7 @@ class LocalTranscriptionProvider(
             }
             return parts.toString()
         } finally {
-            OnlineRecognizerCache.endUse()
+            OnlineRecognizerCache.endUse(recognizer)
         }
     }
 
@@ -431,31 +428,20 @@ class LocalTranscriptionProvider(
 /**
  * Process-wide cache of the single most-recently-used [OfflineRecognizer]. Building one loads the model
  * into native memory (~1s+ for Whisper tiny), so we keep it alive between transcriptions and only rebuild
- * when the model directory changes. Access is serialized; the app transcribes one clip at a time.
+ * when the model or its language changes. The bookkeeping that keeps a recognizer alive while any decode
+ * still uses it lives in [SharedModelCache].
  */
 private object RecognizerCache {
-    private var key: String? = null
-    private var recognizer: OfflineRecognizer? = null
-
-    // A borrowed recognizer must never be freed mid-decode: [acquire]/[endUse] track active users, and an
-    // [unload] request while in use is deferred until the last user returns.
-    private var activeUsers = 0
-    private var releasePending = false
+    private val cache = SharedModelCache<OfflineRecognizer>("stt-idle-unload", release = { it.release() })
 
     /** Idle-unload timeout (ms); 0 disables the timer (freed only via [unload] on memory pressure). */
-    @Volatile
-    var idleUnloadMillis: Long = 0L
-    private val scheduler = Executors.newSingleThreadScheduledExecutor { r ->
-        Thread(r, "stt-idle-unload").apply { isDaemon = true }
-    }
-    private var idleFuture: ScheduledFuture<*>? = null
+    var idleUnloadMillis: Long
+        get() = cache.idleUnloadMillis
+        set(value) {
+            cache.idleUnloadMillis = value
+        }
 
-    @Synchronized
     fun acquire(modelDir: File, numThreads: Int, language: String): OfflineRecognizer {
-        // In use again → cancel any pending idle unload.
-        idleFuture?.cancel(false)
-        idleFuture = null
-
         val encoder = File(modelDir, LocalTranscriptionProvider.ENCODER)
         val decoder = File(modelDir, LocalTranscriptionProvider.DECODER)
         val tokens = File(modelDir, LocalTranscriptionProvider.TOKENS)
@@ -471,61 +457,16 @@ private object RecognizerCache {
         // out of the key for those — otherwise switching languages would throw the model away for nothing.
         val languageless = kind == LocalModelKind.NEMO_TRANSDUCER || kind == LocalModelKind.DOLPHIN
         val cacheKey = modelDir.absolutePath + "|" + (if (languageless) "" else language)
-        val existing = recognizer
-        val rec = if (existing != null && cacheKey == key) {
-            existing
-        } else {
-            existing?.release()
-            recognizer = null
-            key = null
-            buildRecognizer(encoder, decoder, tokens, joiner, model, kind, numThreads, language).also {
-                recognizer = it
-                key = cacheKey
-            }
-        }
-        // A fresh use cancels any pending unload for the now-current model and marks it in use.
-        releasePending = false
-        activeUsers++
-        return rec
-    }
-
-    /** Returns a recognizer borrowed via [acquire]; frees now if an unload was requested while in use,
-     *  otherwise (re)arms the idle-unload timer. */
-    @Synchronized
-    fun endUse() {
-        if (activeUsers > 0) activeUsers--
-        if (activeUsers == 0) {
-            if (releasePending) freeNow() else armIdle()
+        return cache.acquire(cacheKey) {
+            buildRecognizer(encoder, decoder, tokens, joiner, model, kind, numThreads, language)
         }
     }
 
-    /** Requests freeing the model from RAM. Deferred until the last active user returns if one is in flight. */
-    @Synchronized
-    fun unload() {
-        if (activeUsers > 0) {
-            releasePending = true
-            return
-        }
-        freeNow()
-    }
+    /** Returns [recognizer], borrowed via [acquire]. See [SharedModelCache.endUse]. */
+    fun endUse(recognizer: OfflineRecognizer) = cache.endUse(recognizer)
 
-    private fun freeNow() {
-        idleFuture?.cancel(false)
-        idleFuture = null
-        recognizer?.release()
-        recognizer = null
-        key = null
-        releasePending = false
-    }
-
-    private fun armIdle() {
-        idleFuture?.cancel(false)
-        idleFuture = null
-        val delay = idleUnloadMillis
-        if (delay > 0 && recognizer != null) {
-            idleFuture = scheduler.schedule({ unload() }, delay, TimeUnit.MILLISECONDS)
-        }
-    }
+    /** Requests freeing the model from RAM. Deferred until its last user returns if one is in flight. */
+    fun unload() = cache.unload()
 
     private fun buildRecognizer(
         encoder: File,
