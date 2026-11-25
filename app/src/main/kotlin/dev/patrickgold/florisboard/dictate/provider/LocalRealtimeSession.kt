@@ -21,8 +21,6 @@ import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
 import dev.patrickgold.florisboard.dictate.audio.AudioDecode
 import java.io.File
 import java.util.concurrent.Executors
-import java.util.concurrent.ScheduledFuture
-import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -188,9 +186,9 @@ class LocalRealtimeSession(
     private fun release() {
         runCatching { stream?.release() }
         stream = null
-        if (recognizer != null) {
+        recognizer?.let {
             recognizer = null
-            OnlineRecognizerCache.endUse()
+            OnlineRecognizerCache.endUse(it)
         }
     }
 
@@ -229,25 +227,19 @@ class LocalRealtimeSession(
  * between recordings and freed on idle or on Android memory pressure — never while a decode is running.
  */
 internal object OnlineRecognizerCache {
-    private var key: String? = null
-    private var recognizer: OnlineRecognizer? = null
-    private var modelId: String? = null
+    private val cache = SharedModelCache<OnlineRecognizer>(
+        "stt-live-idle-unload",
+        release = { it.release() },
+        onResident = LocalTranscriptionProvider::markResident,
+    )
 
-    private var activeUsers = 0
-    private var releasePending = false
+    var idleUnloadMillis: Long
+        get() = cache.idleUnloadMillis
+        set(value) {
+            cache.idleUnloadMillis = value
+        }
 
-    @Volatile
-    var idleUnloadMillis: Long = 0L
-    private val scheduler = Executors.newSingleThreadScheduledExecutor { r ->
-        Thread(r, "stt-live-idle-unload").apply { isDaemon = true }
-    }
-    private var idleFuture: ScheduledFuture<*>? = null
-
-    @Synchronized
     fun acquire(modelDir: File, numThreads: Int): OnlineRecognizer {
-        idleFuture?.cancel(false)
-        idleFuture = null
-
         val encoder = File(modelDir, LocalTranscriptionProvider.ENCODER)
         val decoder = File(modelDir, LocalTranscriptionProvider.DECODER)
         val joiner = File(modelDir, LocalTranscriptionProvider.JOINER)
@@ -258,61 +250,15 @@ internal object OnlineRecognizerCache {
                 "On-device live model '${modelDir.name}' is not installed",
             )
         }
-
-        val cacheKey = modelDir.absolutePath
-        val existing = recognizer
-        val rec = if (existing != null && cacheKey == key) {
-            existing
-        } else {
-            freeNow()
-            build(encoder, decoder, joiner, tokens, numThreads).also {
-                recognizer = it
-                key = cacheKey
-                modelId = modelDir.name
-                LocalTranscriptionProvider.markResident(modelDir.name, loaded = true)
-            }
-        }
-        releasePending = false
-        activeUsers++
-        return rec
-    }
-
-    @Synchronized
-    fun endUse() {
-        if (activeUsers > 0) activeUsers--
-        if (activeUsers == 0) {
-            if (releasePending) freeNow() else armIdle()
+        return cache.acquire(modelDir.absolutePath, label = modelDir.name) {
+            build(encoder, decoder, joiner, tokens, numThreads)
         }
     }
 
-    @Synchronized
-    fun unload() {
-        if (activeUsers > 0) {
-            releasePending = true
-            return
-        }
-        freeNow()
-    }
+    /** Returns [recognizer], borrowed via [acquire]. See [SharedModelCache.endUse]. */
+    fun endUse(recognizer: OnlineRecognizer) = cache.endUse(recognizer)
 
-    private fun freeNow() {
-        idleFuture?.cancel(false)
-        idleFuture = null
-        recognizer?.release()
-        recognizer = null
-        key = null
-        modelId?.let { LocalTranscriptionProvider.markResident(it, loaded = false) }
-        modelId = null
-        releasePending = false
-    }
-
-    private fun armIdle() {
-        idleFuture?.cancel(false)
-        idleFuture = null
-        val delay = idleUnloadMillis
-        if (delay > 0 && recognizer != null) {
-            idleFuture = scheduler.schedule({ unload() }, delay, TimeUnit.MILLISECONDS)
-        }
-    }
+    fun unload() = cache.unload()
 
     private fun build(
         encoder: File,
