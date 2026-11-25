@@ -25,7 +25,10 @@ import com.k2fsa.sherpa.onnx.Vad
 import com.k2fsa.sherpa.onnx.VadModelConfig
 import dev.patrickgold.florisboard.dictate.TranscriptJoin
 import dev.patrickgold.florisboard.dictate.audio.AudioDecode
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.concurrent.Executors
@@ -82,6 +85,14 @@ class LocalTranscriptionProvider(
     private var startedNanos: Long = 0L
 
     /**
+     * The coroutine the current decode runs in, so [checkDeadline] can notice a cancel between passes.
+     * Without it a cancelled decode ran on to the end: harmless when only the stop button cancelled one,
+     * but the hedge (see `hedgedTranscription`) cancels the local engine whenever the cloud answers first,
+     * and a phone that keeps decoding a transcript nobody will read is spending battery on nothing.
+     */
+    private var job: Job? = null
+
+    /**
      * How long a stretch this model may be given in one decode — see [LocalModelSpec.maxSegmentSeconds].
      *
      * This used to be 28 s for everything, which is Whisper's ceiling and nobody else's: Parakeet
@@ -112,8 +123,11 @@ class LocalTranscriptionProvider(
      *
      * Compares elapsed time rather than a precomputed deadline: `nanoTime`'s origin is arbitrary, so
      * adding to it is the one form of this that can overflow.
+     *
+     * Also where a cancelled decode stops, at the same granularity and for the same reason.
      */
     private fun checkDeadline() {
+        job?.ensureActive()
         if (timeoutMillis <= 0L) return
         if (System.nanoTime() - startedNanos < timeoutMillis * 1_000_000L) return
         throw DictateApiException(
@@ -125,6 +139,7 @@ class LocalTranscriptionProvider(
     override suspend fun transcribe(request: TranscriptionRequest): TranscriptionResult =
         withContext(Dispatchers.Default) {
             startedNanos = System.nanoTime()
+            job = coroutineContext[Job]
             // What "installed" means depends on the model: Whisper wants an encoder/decoder pair, a
             // transducer adds a joiner, SenseVoice has a single model file. The catalog entry says which.
             val missing = requiredFiles(modelDir.name).filterNot { File(modelDir, it).exists() }
@@ -176,6 +191,9 @@ class LocalTranscriptionProvider(
                 }
             } catch (e: DictateApiException) {
                 throw e
+            } catch (c: CancellationException) {
+                // A cancel noticed between passes, not a failure of the engine.
+                throw c
             } catch (t: Throwable) {
                 throw DictateApiException(
                     DictateApiException.Kind.UNKNOWN,
