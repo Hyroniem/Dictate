@@ -39,6 +39,8 @@ import java.util.concurrent.atomic.AtomicReference
  * if the OS already knows there is no working internet, skips it altogether.
  *
  * What it deliberately does not touch is a request that is already under way. See [NetworkBudget.FAST_FAIL].
+ * A provider that is reachable but silent, such as a self-hosted server busy with another job, is not
+ * cut short either: the on-device engine races it instead. See [hedgedTranscription].
  */
 object FastFallback {
 
@@ -120,6 +122,10 @@ object FastFallback {
      * hard about a long recording, so the first dictation has to wait out the full request timeout — but
      * the second does not have to repeat it. Called where the hand-off actually happens, so it only ever
      * remembers a failure the on-device engine was able to absorb.
+     *
+     * That includes the local engine winning a race against a provider that stayed silent (see
+     * [hedgedTranscription]): a server that was too busy to answer one dictation is probably still busy
+     * for the next, and skipping it for a moment saves the wait before the race even starts.
      */
     fun noteUnreachable(providerId: String) {
         lastUnreachable.set(providerId to SystemClock.elapsedRealtime())

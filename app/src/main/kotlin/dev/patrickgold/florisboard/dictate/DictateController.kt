@@ -2249,46 +2249,96 @@ object DictateController {
                     // costs a hand-off rather than the dictation, so stop reaching out after seconds
                     // instead of ~41 of them — and not at all when the OS already says we are offline.
                     val fastFallback = FastFallback.armed(appContext, preset)
+                    // Offline fallback (#104): the downloaded model that takes over when the cloud call
+                    // cannot deliver. Null unless the on-device engine is the chosen fallback (#455).
+                    val onDevice = if (fallbackId == ProviderRegistry.LOCAL.id) localFallbackProvider(appContext) else null
+                    // A provider that is reachable but silent (a self-hosted server busy with another
+                    // job) is raced rather than waited out: see [hedgedTranscription]. Only when the
+                    // fast fallback is armed, the same condition that already shortens the connect phase.
+                    val hedgeAfter = if (fastFallback && onDevice != null) {
+                        hedgeAfterMillis(
+                            recordedSeconds.takeIf { it > 0L }?.toDouble()
+                                ?: wavSeconds(localFallbackFile ?: uploadFile),
+                        )
+                    } else {
+                        null
+                    }
                     try {
-                        if (fastFallback) FastFallback.requireReachable(appContext, preset)
-                        OpenAiCompatibleClient.from(
-                            preset, apiKey,
-                            baseUrlOverride = baseUrlOverrideFor(account),
-                            proxy = prefs.dictate.dictateProxyConfig(),
-                            // Single-call multimodal (issue #130): route audio through chat/completions.
-                            useChatAudio = chatAudio,
-                            trustUserCerts = account.trustUserCerts,
-                            clientCertAlias = account.clientCertAlias,
-                            timeoutSeconds = prefs.dictate.requestTimeout.get().toLong(),
-                            handOverUnreachable = fallbackId != null,
-                            networkBudget = FastFallback.budget(fastFallback),
-                        ).transcribe(
-                            request,
-                            onRetry = { attempt -> setTranscribing(attempt, via = via) },
+                        hedgedTranscription(
+                            hedgeAfterMillis = hedgeAfter ?: Long.MAX_VALUE,
+                            primary = {
+                                try {
+                                    if (fastFallback) FastFallback.requireReachable(appContext, preset)
+                                    OpenAiCompatibleClient.from(
+                                        preset, apiKey,
+                                        baseUrlOverride = baseUrlOverrideFor(account),
+                                        proxy = prefs.dictate.dictateProxyConfig(),
+                                        // Single-call multimodal (issue #130): route audio through chat/completions.
+                                        useChatAudio = chatAudio,
+                                        trustUserCerts = account.trustUserCerts,
+                                        clientCertAlias = account.clientCertAlias,
+                                        timeoutSeconds = prefs.dictate.requestTimeout.get().toLong(),
+                                        handOverUnreachable = fallbackId != null,
+                                        networkBudget = FastFallback.budget(fastFallback),
+                                    ).transcribe(
+                                        request,
+                                        onRetry = { attempt -> setTranscribing(attempt, via = via) },
+                                    )
+                                } catch (e: DictateApiException) {
+                                    // A provider that will not take the m4a gets the WAV instead (#281). Three
+                                    // of the supported providers were added after recording became WAV and have
+                                    // never been sent anything else, so this costs one wasted request rather
+                                    // than a broken provider — and only ever runs for one that actually
+                                    // rejected the format.
+                                    if (packedFrom != null && e.kind == DictateApiException.Kind.FORMAT_NOT_SUPPORTED) {
+                                        OpenAiCompatibleClient.from(
+                                            preset, apiKey,
+                                            baseUrlOverride = baseUrlOverrideFor(account),
+                                            proxy = prefs.dictate.dictateProxyConfig(),
+                                            useChatAudio = chatAudio,
+                                            trustUserCerts = account.trustUserCerts,
+                                            clientCertAlias = account.clientCertAlias,
+                                            timeoutSeconds = prefs.dictate.requestTimeout.get().toLong(),
+                                            handOverUnreachable = fallbackId != null,
+                                        ).transcribe(
+                                            request.copy(audioFile = packedFrom!!),
+                                            onRetry = { attempt -> setTranscribing(attempt, via = via) },
+                                        )
+                                    } else {
+                                        throw e
+                                    }
+                                }
+                            },
+                            backup = onDevice?.let { fallback ->
+                                suspend {
+                                    LocalTranscriptionProvider.setIdleUnloadMillis(
+                                        prefs.dictate.localModelUnloadMinutes.get() * 60_000L,
+                                    )
+                                    // Sped-up audio (#272) is for the provider that charges by the second, not
+                                    // for the engine on this phone: the fallback gets the recording as it was.
+                                    fallback.provider.transcribe(
+                                        localFallbackFile?.let { request.copy(audioFile = it) } ?: request,
+                                    )
+                                }
+                            },
+                            canFallBack = { e -> TranscriptionFallback.takesOver(ProviderRegistry.LOCAL.id, e) },
+                            onBackupStarted = { setTranscribing(localModel = onDevice?.model) },
+                            onBackupUsed = {
+                                // Remember this so the next dictation does not pay to rediscover it (#104).
+                                FastFallback.noteUnreachable(preset.id)
+                                setTranscribing(localModel = onDevice?.model)
+                                // From here on any failure is the local engine's, not the provider's — which
+                                // decides both the wording of a timeout and whether offering "try on-device"
+                                // would be advice to do the thing that just ran out of time (#354).
+                                ranOnDevice = true
+                                fallbackModel = onDevice?.model
+                            },
                         )
                     } catch (e: DictateApiException) {
-                        // A provider that will not take the m4a gets the WAV instead (#281). Three of the
-                        // supported providers were added after recording became WAV and have never been
-                        // sent anything else, so this costs one wasted request rather than a broken
-                        // provider — and only ever runs for one that actually rejected the format.
-                        if (packedFrom != null && e.kind == DictateApiException.Kind.FORMAT_NOT_SUPPORTED) {
-                            OpenAiCompatibleClient.from(
-                                preset, apiKey,
-                                baseUrlOverride = baseUrlOverrideFor(account),
-                                proxy = prefs.dictate.dictateProxyConfig(),
-                                useChatAudio = chatAudio,
-                                trustUserCerts = account.trustUserCerts,
-                                clientCertAlias = account.clientCertAlias,
-                                timeoutSeconds = prefs.dictate.requestTimeout.get().toLong(),
-                                handOverUnreachable = fallbackId != null,
-                            ).transcribe(
-                                request.copy(audioFile = packedFrom!!),
-                                onRetry = { attempt -> setTranscribing(attempt, via = via) },
-                            )
-                        } else {
                         // Another provider takes over a server that could not be reached at all (#455). It
                         // gets the recording as it was, not this provider's packed or sped-up copy, and runs
                         // through this same path from the top, so its own model, formats and limits apply.
+                        // Never raced: with another provider as the fallback there is no on-device backup.
                         if (fallbackId != null && fallbackId != ProviderRegistry.LOCAL.id &&
                             TranscriptionFallback.takesOver(fallbackId, e)
                         ) {
@@ -2296,27 +2346,7 @@ object DictateController {
                                 throw FallbackHandOver(prefs.dictate.providerAccounts.get().getOrEmpty(fallbackId), copy, e)
                             }
                         }
-                        // Offline fallback (#104): the cloud call failed because we're offline (after its
-                        // retries) — transcribe on-device with the downloaded model instead of erroring.
-                        val fallback = (if (fallbackId == ProviderRegistry.LOCAL.id) localFallbackProvider(appContext, e) else null)
-                            ?: throw e
-                        // Remember this so the next dictation does not pay to rediscover it (#104).
-                        FastFallback.noteUnreachable(preset.id)
-                        LocalTranscriptionProvider.setIdleUnloadMillis(
-                            prefs.dictate.localModelUnloadMinutes.get() * 60_000L,
-                        )
-                        // Sped-up audio (#272) is for the provider that charges by the second, not for the
-                        // engine on this phone: the fallback gets the recording as it was.
-                        setTranscribing(localModel = fallback.model)
-                        // From here on any failure is the local engine's, not the provider's — which
-                        // decides both the wording of a timeout and whether offering "try on-device"
-                        // would be advice to do the thing that just ran out of time (#354).
-                        ranOnDevice = true
-                        fallbackModel = fallback.model
-                        fallback.provider.transcribe(
-                            localFallbackFile?.let { request.copy(audioFile = it) } ?: request,
-                        )
-                        }
+                        throw e
                     }
                 }
                 logLatency(latencyTrace, "providerCompleted", providerStartedNanos)
@@ -3552,53 +3582,70 @@ object DictateController {
             } else {
                 if (apiKey.isBlank() && requiresKey(account)) return null
                 // Same fast hand-off as the single-shot path: a segment is worth even less waiting,
-                // because the ones behind it are queueing up while this one stalls.
+                // because the ones behind it are queueing up while this one stalls. That includes the
+                // race against a provider that is reachable but silent (see [hedgedTranscription]).
                 val fastFallback = FastFallback.armed(appContext, preset)
+                val onDevice = if (fallbackId == ProviderRegistry.LOCAL.id) localFallbackProvider(appContext) else null
+                val hedgeAfter = if (fastFallback && onDevice != null) hedgeAfterMillis(wavSeconds(wav)) else null
                 try {
-                    if (fastFallback) FastFallback.requireReachable(appContext, preset)
-                    OpenAiCompatibleClient.from(
-                        preset, apiKey,
-                        baseUrlOverride = baseUrlOverrideFor(account),
-                        proxy = prefs.dictate.dictateProxyConfig(),
-                        useChatAudio = false,
-                        trustUserCerts = account.trustUserCerts,
-                        clientCertAlias = account.clientCertAlias,
-                        timeoutSeconds = prefs.dictate.requestTimeout.get().toLong(),
-                        handOverUnreachable = fallbackId != null,
-                        networkBudget = FastFallback.budget(fastFallback),
-                    ).transcribe(request)
+                    hedgedTranscription(
+                        hedgeAfterMillis = hedgeAfter ?: Long.MAX_VALUE,
+                        primary = {
+                            try {
+                                if (fastFallback) FastFallback.requireReachable(appContext, preset)
+                                OpenAiCompatibleClient.from(
+                                    preset, apiKey,
+                                    baseUrlOverride = baseUrlOverrideFor(account),
+                                    proxy = prefs.dictate.dictateProxyConfig(),
+                                    useChatAudio = false,
+                                    trustUserCerts = account.trustUserCerts,
+                                    clientCertAlias = account.clientCertAlias,
+                                    timeoutSeconds = prefs.dictate.requestTimeout.get().toLong(),
+                                    handOverUnreachable = fallbackId != null,
+                                    networkBudget = FastFallback.budget(fastFallback),
+                                ).transcribe(request)
+                            } catch (e: DictateApiException) {
+                                // A provider that will not take the m4a gets the WAV instead (#281); everything
+                                // else is the fallback's to absorb, if it can.
+                                if (packed != null && e.kind == DictateApiException.Kind.FORMAT_NOT_SUPPORTED) {
+                                    OpenAiCompatibleClient.from(
+                                        preset, apiKey,
+                                        baseUrlOverride = baseUrlOverrideFor(account),
+                                        proxy = prefs.dictate.dictateProxyConfig(),
+                                        useChatAudio = false,
+                                        trustUserCerts = account.trustUserCerts,
+                                        clientCertAlias = account.clientCertAlias,
+                                        timeoutSeconds = prefs.dictate.requestTimeout.get().toLong(),
+                                        handOverUnreachable = fallbackId != null,
+                                    ).transcribe(request.copy(audioFile = toUpload))
+                                } else {
+                                    throw e
+                                }
+                            }
+                        },
+                        // On-device gets the segment as recorded: never the sped-up copy (#272), and never a
+                        // re-decode of the m4a packed from it (#281).
+                        backup = onDevice?.let { fallback ->
+                            suspend { fallback.provider.transcribe(request.copy(audioFile = wav)) }
+                        },
+                        canFallBack = { e -> TranscriptionFallback.takesOver(ProviderRegistry.LOCAL.id, e) },
+                        onBackupUsed = {
+                            FastFallback.noteUnreachable(preset.id)
+                            fallbackEngine = onDevice?.let { onDeviceHistoryEngine(it.model) }
+                        },
+                    )
                 } catch (e: DictateApiException) {
-                    // A provider that will not take the m4a gets the WAV instead (#281); everything else
-                    // falls through to the fallback as before.
-                    if (packed != null && e.kind == DictateApiException.Kind.FORMAT_NOT_SUPPORTED) {
-                        OpenAiCompatibleClient.from(
-                            preset, apiKey,
-                            baseUrlOverride = baseUrlOverrideFor(account),
-                            proxy = prefs.dictate.dictateProxyConfig(),
-                            useChatAudio = false,
-                            trustUserCerts = account.trustUserCerts,
-                            clientCertAlias = account.clientCertAlias,
-                            timeoutSeconds = prefs.dictate.requestTimeout.get().toLong(),
-                            handOverUnreachable = fallbackId != null,
-                        ).transcribe(request.copy(audioFile = toUpload))
-                    } else {
-                        // Another provider takes a segment the active one could not even be reached for (#455),
-                        // from the segment as recorded, with its own model and formats.
-                        if (fallbackId != null && fallbackId != ProviderRegistry.LOCAL.id &&
-                            TranscriptionFallback.takesOver(fallbackId, e)
-                        ) {
-                            val other = prefs.dictate.providerAccounts.get().getOrEmpty(fallbackId)
-                            Log.i(LATENCY_LOG_TAG, "phase=fallback segment to=${presetFor(other).id} kind=${e.kind}")
-                            return transcribeSegmentRaw(appContext, wav, continuity, fallbackAccount = other)
-                                ?.let { SegmentText(it.text, historyEngineOf(appContext, other)) }
-                        }
-                        val fallback = (if (fallbackId == ProviderRegistry.LOCAL.id) localFallbackProvider(appContext, e) else null)
-                            ?: throw e
-                        FastFallback.noteUnreachable(preset.id)
-                        fallbackEngine = onDeviceHistoryEngine(fallback.model)
-                        // On-device gets the segment as recorded, never the sped-up copy (#272).
-                        fallback.provider.transcribe(if (spedUp != null) request.copy(audioFile = wav) else request)
+                    // Another provider takes a segment the active one could not even be reached for (#455),
+                    // from the segment as recorded, with its own model and formats.
+                    if (fallbackId != null && fallbackId != ProviderRegistry.LOCAL.id &&
+                        TranscriptionFallback.takesOver(fallbackId, e)
+                    ) {
+                        val other = prefs.dictate.providerAccounts.get().getOrEmpty(fallbackId)
+                        Log.i(LATENCY_LOG_TAG, "phase=fallback segment to=${presetFor(other).id} kind=${e.kind}")
+                        return transcribeSegmentRaw(appContext, wav, continuity, fallbackAccount = other)
+                            ?.let { SegmentText(it.text, historyEngineOf(appContext, other)) }
                     }
+                    throw e
                 }
             }
             SegmentText(result.text, fallbackEngine)
@@ -5558,15 +5605,13 @@ object DictateController {
     }
 
     /**
-     * The on-device provider to retry [error] on as an offline fallback (#104), or null when it doesn't
-     * apply: the failure isn't a connectivity one, or no local model is downloaded. Whether the on-device
-     * engine is the fallback at all is the caller's to know ([fallbackIdFor]).
+     * The on-device engine that takes over as the offline fallback (#104), or null when no local model is
+     * downloaded. Whether the on-device engine is the fallback at all is the caller's to know
+     * ([fallbackIdFor]), and which failures it may absorb is [TranscriptionFallback.takesOver]'s. Asked
+     * before any error is known, because the hedge (see [hedgedTranscription]) may start the local engine
+     * while the cloud call is still running.
      */
-    private fun localFallbackProvider(
-        context: Context,
-        error: DictateApiException,
-    ): LocalFallback? {
-        if (!TranscriptionFallback.takesOver(ProviderRegistry.LOCAL.id, error)) return null
+    private fun localFallbackProvider(context: Context): LocalFallback? {
         val localAccount = prefs.dictate.providerAccounts.get().getOrEmpty(ProviderRegistry.LOCAL.id)
         val localModel = transcriptionModelFor(context, localAccount, ProviderRegistry.LOCAL)
             .takeIf { it.isNotBlank() } ?: return null
