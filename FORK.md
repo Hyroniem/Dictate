@@ -91,7 +91,8 @@ Consequences worth knowing:
 
 None of this changes any behaviour unless **both** are true:
 
-- the offline fallback is switched on in settings (`localFallbackEnabled`, upstream default: **off**), and
+- the on-device engine is the chosen transcription fallback (since v6.5.0 the Fallback drop-down in the
+  Transcription dialog, `transcriptionFallbackId`, upstream default: **none**), and
 - a local model is downloaded.
 
 Without them the code paths are never entered, which is what makes the patch safe to carry.
@@ -112,8 +113,10 @@ Without them the code paths are never entered, which is what makes the patch saf
 | `62d5bce1` | fork app label via a `release` source set override |
 | `13c6c5d5` | CI: build Bergamot (on-device translation), required since v6.4.0 |
 | `9a204cbc` | CI: automatic rebase onto each new upstream release |
+| `7ffaab6` | race the on-device engine against a reachable but silent provider |
+| `8e5b5a7` | `SharedModelCache`: never free a recognizer a decode still uses |
 
-Hashes are as of the v6.4.0 rebase; every rebase rewrites them, so after an automatic one
+Hashes are as of the v6.4.0 rebase (the last two rows: v6.5.0); every rebase rewrites them, so after an automatic one
 `git log --oneline $(git merge-base main <tag>)..main` is the authoritative list.
 
 The test-heap and lint-baseline workarounds that used to live here are gone: upstream fixed both
@@ -131,6 +134,21 @@ Rebased onto v6.4.0 on 2026-10-07: no conflicts. The retry and connect budget an
 v6.4.0 makes the build depend on a natively compiled Bergamot library, which CI now builds
 (`13c6c5d5`). xAI's new `stt` transcription goes through `executeForBody` like the others, so it gets
 the fast-fail budget too.
+
+Rebased onto v6.5.0 on 2026-11-26 by hand, after the automatic sync stopped on conflicts. Upstream
+reworked the fallback itself: the user now picks one fallback (another set-up provider or the on-device
+engine, #455), `localFallbackEnabled` is gone, and a provider with a fallback waiting gets a 4 s connect
+timeout and no retry on a failed connect (`handOverUnreachable`). Resolved as:
+
+- `FastFallback.armed` is now just "the fallback that applies is the on-device engine"; upstream's
+  `fallbackIdFor` already checks a cloud provider is active and a local model is installed.
+- Connect timeout is the shorter of upstream's 4 s and the fork's budget; the retry delay and count
+  still come from `NetworkBudget`. With no fallback the default budget (8 s) matches upstream exactly.
+- The hedge runs only with the on-device fallback. Upstream's hand-over to another provider stays
+  outside it and is unchanged, as is the rule for which errors the on-device engine absorbs
+  (`TranscriptionFallback.takesOver`, which replaced the fork's own copy).
+- `SharedModelCache` gained an `onResident` hook so upstream's new `residentModels` (the Smartbar's
+  "model loaded" icon) is still kept up to date; upstream's new `preload` returns what it borrowed.
 
 ### Footprint in upstream files
 

@@ -165,4 +165,29 @@ class SharedModelCacheTest {
         assertTrue(rec.released)
         assertNull(cache.cached())
     }
+
+    @Test
+    fun residencyFollowsTheModelNotTheInstance() {
+        // Upstream's residentModels (the Smartbar's "loaded" icon) is told by model, while the cache swaps
+        // instances: another language of the same model must not read as unloaded when the old one goes.
+        val resident = mutableSetOf<String>()
+        val cache = SharedModelCache<FakeRecognizer>(
+            threadName = "test-idle-unload",
+            release = { it.released = true },
+            onResident = { label, loaded -> if (loaded) resident += label else resident -= label },
+        )
+        val dutch = cache.acquire("whisper|nl", label = "whisper") { FakeRecognizer("nl") }
+        assertEquals(setOf("whisper"), resident)
+        val english = cache.acquire("whisper|en", label = "whisper") { FakeRecognizer("en") }
+        cache.endUse(dutch)
+        assertTrue(dutch.released)
+        assertEquals(setOf("whisper"), resident, "still loaded: only the Dutch instance went")
+        cache.endUse(english)
+        val parakeet = cache.acquire("parakeet|", label = "parakeet") { FakeRecognizer("parakeet") }
+        assertTrue(english.released)
+        assertEquals(setOf("parakeet"), resident)
+        cache.endUse(parakeet)
+        cache.unload()
+        assertEquals(emptySet(), resident)
+    }
 }

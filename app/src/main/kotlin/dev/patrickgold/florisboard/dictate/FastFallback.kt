@@ -15,13 +15,10 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.os.SystemClock
 import androidx.core.content.getSystemService
-import dev.patrickgold.florisboard.app.FlorisPreferenceStore
 import dev.patrickgold.florisboard.dictate.provider.DictateApiException
-import dev.patrickgold.florisboard.dictate.provider.LocalModelManager
 import dev.patrickgold.florisboard.dictate.provider.NetworkBudget
 import dev.patrickgold.florisboard.dictate.provider.ProviderPreset
 import dev.patrickgold.florisboard.dictate.provider.ProviderRegistry
-import dev.patrickgold.florisboard.dictate.provider.TranscriptionApi
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -44,28 +41,17 @@ import java.util.concurrent.atomic.AtomicReference
  */
 object FastFallback {
 
-    private val prefs by FlorisPreferenceStore
-
     /**
-     * Whether the on-device engine can take over for [preset] right now: the fallback is switched on, the
-     * active provider is a cloud one, and a local model is actually downloaded.
+     * Whether the on-device engine is standing by behind this dictation: [fallbackId] is the fallback that
+     * applies (`DictateController.fallbackIdFor`), and it is [ProviderRegistry.LOCAL]'s.
      *
-     * The same three conditions gate the existing fallback in `DictateController.localFallbackProvider`,
-     * which is what decides the hand-off after the fact. This answers them before the call, because a
-     * budget has to be chosen before there is an error to inspect.
+     * Since v6.5 the user picks one transcription fallback (#455) instead of switching the offline one on,
+     * and that choice only applies while the active provider is a cloud one and, for the on-device engine,
+     * a local model is downloaded. Those are the conditions this used to check one by one. Another cloud
+     * provider as the fallback does not arm this: upstream's own short connect timeout covers that case,
+     * and failing fast there would only hand the recording to a second network call.
      */
-    fun armed(context: Context, preset: ProviderPreset): Boolean {
-        if (!prefs.dictate.localFallbackEnabled.get()) return false
-        if (preset.transcriptionApi == TranscriptionApi.LOCAL_ONDEVICE) return false
-        val account = prefs.dictate.providerAccounts.get().getOrEmpty(ProviderRegistry.LOCAL.id)
-        // Same resolution order as DictateController.transcriptionModelFor for a local preset: the chosen
-        // (or preset-default) model if it is downloaded, otherwise the realtime one if that is.
-        val chosen = account.transcriptionModel.takeIf { it.isNotBlank() }
-            ?: ProviderRegistry.LOCAL.defaultTranscriptionModel
-            ?: ""
-        if (chosen.isNotBlank() && LocalModelManager.isInstalled(context, chosen)) return true
-        return account.realtimeModel.let { it.isNotBlank() && LocalModelManager.isInstalled(context, it) }
-    }
+    fun armed(fallbackId: String?): Boolean = fallbackId == ProviderRegistry.LOCAL.id
 
     /** The reaching-out budget to give a cloud call, given whether the on-device engine [armed] behind it. */
     fun budget(armed: Boolean): NetworkBudget =

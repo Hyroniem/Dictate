@@ -2248,7 +2248,7 @@ object DictateController {
                     // Fast offline fallback: with a downloaded model standing by, an unreachable provider
                     // costs a hand-off rather than the dictation, so stop reaching out after seconds
                     // instead of ~41 of them — and not at all when the OS already says we are offline.
-                    val fastFallback = FastFallback.armed(appContext, preset)
+                    val fastFallback = FastFallback.armed(fallbackId)
                     // Offline fallback (#104): the downloaded model that takes over when the cloud call
                     // cannot deliver. Null unless the on-device engine is the chosen fallback (#455).
                     val onDevice = if (fallbackId == ProviderRegistry.LOCAL.id) localFallbackProvider(appContext) else null
@@ -3584,7 +3584,7 @@ object DictateController {
                 // Same fast hand-off as the single-shot path: a segment is worth even less waiting,
                 // because the ones behind it are queueing up while this one stalls. That includes the
                 // race against a provider that is reachable but silent (see [hedgedTranscription]).
-                val fastFallback = FastFallback.armed(appContext, preset)
+                val fastFallback = FastFallback.armed(fallbackId)
                 val onDevice = if (fallbackId == ProviderRegistry.LOCAL.id) localFallbackProvider(appContext) else null
                 val hedgeAfter = if (fastFallback && onDevice != null) hedgeAfterMillis(wavSeconds(wav)) else null
                 try {
