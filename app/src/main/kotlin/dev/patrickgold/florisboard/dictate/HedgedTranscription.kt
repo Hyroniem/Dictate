@@ -137,8 +137,14 @@ internal fun hedgeAfterMillis(audioSeconds: Double?): Long? {
     return HEDGE_BASE_MS + (audioSeconds * HEDGE_PER_AUDIO_SECOND_MS).toLong()
 }
 
-/** Silence every cloud transcription is allowed before the hedge, however short the recording. */
-internal const val HEDGE_BASE_MS = 8_000L
+/**
+ * Silence every cloud transcription is allowed before the hedge, however short the recording.
+ *
+ * Two seconds, down from eight: a self-hosted server busy with someone else's job should not keep a
+ * dictation waiting, and a free one answers a short clip well within that. The share of the recording's
+ * length on top stays, so a long dictation to a free server still does not wake the local engine.
+ */
+internal const val HEDGE_BASE_MS = 2_000L
 
 /** Extra silence allowed per second of audio: a fifth of the recording's length. */
 internal const val HEDGE_PER_AUDIO_SECOND_MS = 200L
